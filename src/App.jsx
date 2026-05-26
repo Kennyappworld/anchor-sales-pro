@@ -53,6 +53,21 @@ function daysDiff(dateStr) {
 }
 function fmt(n) { return "₦" + Number(n).toLocaleString(); }
 function uid() { return Math.random().toString(36).slice(2, 10); }
+
+const EXPENSE_CATEGORIES = {
+  PHARMACY:    ["Stock Purchase","Rent","Salaries","Utilities","Generator/Fuel","Regulatory Fees","Marketing","Delivery","Equipment","Packaging","Other"],
+  EATERY:      ["Ingredients/Food Cost","Rent","Salaries","Utilities","Generator/Fuel","Cooking Gas","Equipment Maintenance","Marketing","Delivery/Logistics","Packaging","Other"],
+  SUPERMARKET: ["Stock Purchase","Rent","Salaries","Utilities","Generator/Fuel","Security","Marketing","Logistics/Delivery","Equipment","Packaging","Other"],
+};
+
+function seedExpenses(type) {
+  const cats = EXPENSE_CATEGORIES[type] || EXPENSE_CATEGORIES.SUPERMARKET;
+  const pool = {PHARMACY:[45000,120000,8500,15000,22000],EATERY:[38000,90000,7500,12000,18000],SUPERMARKET:[85000,200000,12000,25000,35000]}[type]||[20000,50000];
+  return Array.from({length:20},(_,i)=>{
+    const d=new Date(); d.setDate(d.getDate()-Math.floor(Math.random()*60));
+    return {id:uid(),category:cats[i%cats.length],description:"",amount:pool[i%pool.length]+Math.floor(Math.random()*5000),date:d.toISOString(),recordedBy:"Owner",ref:"EXP-"+uid().toUpperCase().slice(0,8)};
+  });
+}
 const fmtDate = (iso) => new Date(iso).toLocaleDateString("en-NG", { day: "2-digit", month: "short", year: "numeric" });
 const fmtTime = (iso) => new Date(iso).toLocaleTimeString("en-NG", { hour: "2-digit", minute: "2-digit" });
 
@@ -104,6 +119,7 @@ function initPlatform() {
     brandColor: null,
     receiptFooter: "Thank you for your business!",
     tables: type === "EATERY" ? Array.from({length:8},(_,i)=>({id:uid(),number:i+1,status:"free",order:null})) : [],
+    expenses: seedExpenses(type),
   });
 
   function generateSales(type) {
@@ -980,6 +996,7 @@ function TenantApp({ platform, tenant, session, updateTenant, onLogout }) {
     { id:"inventory", icon:"📦", label:"Inventory", roles:["tenant_super","admin"] },
     ...(tenant.type==="EATERY" ? [{ id:"tables", icon:"🪑", label:"Tables", roles:["tenant_super","admin","salesperson"] }] : []),
     { id:"sales", icon:"📈", label:"Sales & Reports", roles:["tenant_super","admin"] },
+    { id:"finance", icon:"💼", label:"Finance",          roles:["tenant_super","admin"] },
     { id:"users", icon:"👥", label:"Users", roles:["tenant_super","admin"] },
     { id:"devices", icon:"📱", label:"Devices", roles:["tenant_super"] },
     { id:"branding",     icon:"🎨", label:"Branding",      roles:["tenant_super"] },
@@ -1040,9 +1057,10 @@ function TenantApp({ platform, tenant, session, updateTenant, onLogout }) {
         {page==="inventory" && <InventoryPage tenant={tenant} theme={theme} updateTenant={updateTenant} plan={plan} />}
         {page==="tables" && tenant.type==="EATERY" && <TablesPage tenant={tenant} theme={theme} updateTenant={updateTenant} />}
         {page==="sales" && <SalesReportsPage tenant={tenant} theme={theme} />}
+        {page==="finance" && <FinancePage tenant={tenant} theme={theme} updateTenant={updateTenant} session={session} />}
         {page==="users" && <UsersPage tenant={tenant} theme={theme} updateTenant={updateTenant} session={session} plan={plan} />}
         {page==="devices" && <TenantDevicesPage tenant={tenant} theme={theme} updateTenant={updateTenant} /> }
-        {page==="branding"     && <BrandingPage tenant={tenant} theme={theme} updateTenant={updateTenant} plan={plan} />}
+        {page==="branding"     && <BrandingPage key={JSON.stringify(tenant.branding)} tenant={tenant} theme={theme} updateTenant={updateTenant} plan={plan} />}
         {page==="subscription" && <SubscriptionPage tenant={tenant} theme={theme} plan={plan} daysLeft={daysLeft} platform={platform} acc={acc} />}
       </div>
     </div>
@@ -2050,13 +2068,14 @@ function TenantDevicesPage({ tenant, theme, updateTenant }) {
    Shown after every checkout. Logo only on Growth / Pro plans.
 ═══════════════════════════════════════════════════════════════════════════ */
 function ReceiptView({ receipt, tenant, theme, onNew }) {
-  const planTier  = tenant.planId;           // starter | growth | pro
+  const planTier  = tenant.planId;
   const canBrand  = planTier === "growth" || planTier === "pro";
-  const logo      = canBrand && tenant.branding?.logoDataUrl;
-  const bizName   = canBrand && tenant.branding?.displayName  ? tenant.branding.displayName  : tenant.name;
-  const bizAddr   = canBrand && tenant.branding?.displayAddr  ? tenant.branding.displayAddr  : tenant.address;
-  const bizPhone  = canBrand && tenant.branding?.displayPhone ? tenant.branding.displayPhone : tenant.phone;
-  const footer    = canBrand && tenant.branding?.receiptFooter ? tenant.branding.receiptFooter : "Thank you for your patronage.";
+  // Always use branding values if they exist (saved from BrandingPage)
+  const logo      = tenant.branding?.logoDataUrl || null;
+  const bizName   = (tenant.branding?.displayName  && tenant.branding.displayName.trim())  ? tenant.branding.displayName  : tenant.name;
+  const bizAddr   = (tenant.branding?.displayAddr  && tenant.branding.displayAddr.trim())  ? tenant.branding.displayAddr  : tenant.address;
+  const bizPhone  = (tenant.branding?.displayPhone && tenant.branding.displayPhone.trim()) ? tenant.branding.displayPhone : tenant.phone;
+  const footer    = (tenant.branding?.receiptFooter && tenant.branding.receiptFooter.trim()) ? tenant.branding.receiptFooter : "Thank you for your business!";
 
   const subtotal  = receipt.items.reduce((s, i) => s + i.price * i.qty, 0);
   const vatRate   = 0.075;
@@ -2224,15 +2243,17 @@ function BrandingPage({ tenant, theme, updateTenant, plan }) {
   function saveChanges() {
     updateTenant(t => ({
       ...t,
+      // Also persist at top level so receipt always picks up fresh values
+      brandLogo:  preview || t.brandLogo,
+      brandColor: form.primaryColor || t.brandColor,
       branding: {
-        ...t.branding,
-        logoDataUrl:    preview,
-        displayName:    form.displayName,
-        displayAddr:    form.displayAddr,
-        displayPhone:   form.displayPhone,
-        receiptFooter:  form.receiptFooter,
-        primaryColor:   form.primaryColor,
-        updatedAt:      new Date().toISOString(),
+        logoDataUrl:   preview,
+        displayName:   form.displayName.trim() || t.name,
+        displayAddr:   form.displayAddr.trim(),
+        displayPhone:  form.displayPhone.trim(),
+        receiptFooter: form.receiptFooter.trim() || "Thank you for your business!",
+        primaryColor:  form.primaryColor,
+        updatedAt:     new Date().toISOString(),
       }
     }));
     setSaved(true);
@@ -2639,6 +2660,562 @@ function GlobalSearchPage({ platform }) {
             <span>Total: <strong style={{ color: "#4ade80" }}>{fmt(totalFiltered)}</strong></span>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FINANCE HUB — tabs: Expenses | P&L | Balance Sheet
+═══════════════════════════════════════════════════════════════════════════ */
+function FinancePage({ tenant, theme, updateTenant, session }) {
+  const [tab, setTab] = useState("pl");
+
+  const tabs = [
+    { id:"pl",       label:"📊 P&L Report"    },
+    { id:"expenses", label:"💸 Expenses"       },
+    { id:"balance",  label:"⚖️ Balance Sheet"  },
+  ];
+
+  return (
+    <div style={{ padding:"24px" }}>
+      {/* Header */}
+      <div style={{ marginBottom:"20px" }}>
+        <div style={{ fontSize:"20px", fontWeight:"700", color:"#1a1a2a" }}>💼 Finance</div>
+        <div style={{ fontSize:"12px", color:"#8a8aaa", marginTop:"3px" }}>
+          Expenses, Profit & Loss, Balance Sheet — custom date range
+        </div>
+      </div>
+
+      {/* Tab switcher */}
+      <div style={{ display:"flex", gap:"0", marginBottom:"24px", background:"#fff", borderRadius:"10px", padding:"4px", boxShadow:"0 1px 4px rgba(0,0,0,0.06)", width:"fit-content" }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{
+            padding:"9px 20px", border:"none", borderRadius:"8px", cursor:"pointer",
+            background: tab===t.id ? theme.accent : "transparent",
+            color: tab===t.id ? "#fff" : "#8a8aaa",
+            fontSize:"13px", fontWeight: tab===t.id ? "700" : "400",
+            transition:"all 0.15s",
+          }}>{t.label}</button>
+        ))}
+      </div>
+
+      {tab === "pl"       && <PLReport       tenant={tenant} theme={theme} />}
+      {tab === "expenses" && <ExpensesPage   tenant={tenant} theme={theme} updateTenant={updateTenant} session={session} />}
+      {tab === "balance"  && <BalanceSheet   tenant={tenant} theme={theme} />}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   P&L REPORT — custom date range, trend chart, category breakdown
+═══════════════════════════════════════════════════════════════════════════ */
+function PLReport({ tenant, theme }) {
+  const today     = new Date().toISOString().slice(0,10);
+  const monthAgo  = new Date(Date.now() - 30*864e5).toISOString().slice(0,10);
+
+  const [from, setFrom]       = useState(monthAgo);
+  const [to,   setTo]         = useState(today);
+  const [view, setView]       = useState("monthly"); // monthly | weekly | daily
+
+  const expenses = tenant.expenses || [];
+  const sales    = tenant.sales    || [];
+
+  // Filter by date range
+  function inRange(dateStr) {
+    const d = dateStr.slice(0,10);
+    return (!from || d >= from) && (!to || d <= to);
+  }
+
+  const filteredSales    = sales.filter(s => inRange(s.date));
+  const filteredExpenses = expenses.filter(e => inRange(e.date));
+
+  const totalRevenue  = filteredSales.reduce((s,x) => s + x.total, 0);
+  const totalCOGS     = filteredSales.reduce((s,x) => {
+    const prod = tenant.products.find(p => p.id === x.productId);
+    return s + (prod?.cost || 0) * x.qty;
+  }, 0);
+  const grossProfit   = totalRevenue - totalCOGS;
+  const grossMargin   = totalRevenue > 0 ? (grossProfit / totalRevenue * 100) : 0;
+  const totalExpenses = filteredExpenses.reduce((s,e) => s + e.amount, 0);
+  const netProfit     = grossProfit - totalExpenses;
+  const netMargin     = totalRevenue > 0 ? (netProfit / totalRevenue * 100) : 0;
+
+  // Expense by category
+  const expByCat = {};
+  filteredExpenses.forEach(e => {
+    expByCat[e.category] = (expByCat[e.category] || 0) + e.amount;
+  });
+  const topExpCats = Object.entries(expByCat).sort((a,b)=>b[1]-a[1]);
+
+  // Trend: group sales + expenses by period
+  function periodKey(dateStr) {
+    const d = new Date(dateStr);
+    if (view === "daily")   return d.toLocaleDateString("en-NG",{day:"2-digit",month:"short"});
+    if (view === "weekly")  {
+      const startOfYear = new Date(d.getFullYear(), 0, 1);
+      const week = Math.ceil(((d - startOfYear) / 864e5 + startOfYear.getDay() + 1) / 7);
+      return `W${week} ${d.getFullYear()}`;
+    }
+    return d.toLocaleDateString("en-NG",{month:"short",year:"numeric"});
+  }
+
+  const trendMap = {};
+  filteredSales.forEach(s => {
+    const k = periodKey(s.date);
+    if (!trendMap[k]) trendMap[k] = {revenue:0, expenses:0, profit:0};
+    trendMap[k].revenue += s.total;
+  });
+  filteredExpenses.forEach(e => {
+    const k = periodKey(e.date);
+    if (!trendMap[k]) trendMap[k] = {revenue:0, expenses:0, profit:0};
+    trendMap[k].expenses += e.amount;
+  });
+  Object.values(trendMap).forEach(v => { v.profit = v.revenue - v.expenses; });
+  const trendData  = Object.entries(trendMap).sort((a,b)=>a[0]>b[0]?1:-1);
+  const maxTrend   = Math.max(...trendData.map(([,v])=>Math.max(v.revenue,v.expenses)),1);
+
+  const kpis = [
+    { label:"Revenue",       value:fmt(totalRevenue),  color:"#2563eb",  icon:"💰" },
+    { label:"COGS",          value:fmt(totalCOGS),     color:"#d97706",  icon:"📦" },
+    { label:"Gross Profit",  value:fmt(grossProfit),   color:theme.accent,icon:"📈", sub:`Margin ${grossMargin.toFixed(1)}%` },
+    { label:"Total Expenses",value:fmt(totalExpenses), color:"#dc2626",  icon:"💸" },
+    { label:"Net Profit",    value:fmt(netProfit),     color:netProfit>=0?"#059669":"#dc2626", icon:netProfit>=0?"✅":"⚠️", sub:`Net margin ${netMargin.toFixed(1)}%` },
+  ];
+
+  const inputSt = { padding:"9px 12px", border:"1px solid #ddd", borderRadius:"7px", fontSize:"13px", outline:"none", background:"#fff" };
+
+  return (
+    <div>
+      {/* Date range + period controls */}
+      <div style={{ display:"flex", gap:"12px", alignItems:"center", marginBottom:"20px", flexWrap:"wrap" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:"8px", fontSize:"13px", color:"#6a6a8a" }}>
+          <span>From</span>
+          <input type="date" value={from} onChange={e=>setFrom(e.target.value)} style={inputSt} />
+          <span>To</span>
+          <input type="date" value={to}   onChange={e=>setTo(e.target.value)}   style={inputSt} />
+        </div>
+        <div style={{ display:"flex", gap:"4px", background:"#fff", borderRadius:"8px", padding:"3px", border:"1px solid #e5e7eb" }}>
+          {[["daily","Day"],["weekly","Week"],["monthly","Month"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setView(v)} style={{
+              padding:"5px 12px", border:"none", borderRadius:"6px", cursor:"pointer", fontSize:"12px",
+              background:view===v?theme.accent:"transparent", color:view===v?"#fff":"#8a8aaa", fontWeight:view===v?"700":"400",
+            }}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* KPI row */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:"12px", marginBottom:"22px" }}>
+        {kpis.map(k=>(
+          <div key={k.label} style={{ background:"#fff", borderRadius:"10px", padding:"16px", borderTop:`3px solid ${k.color}`, boxShadow:"0 1px 4px rgba(0,0,0,0.05)" }}>
+            <div style={{ fontSize:"18px", marginBottom:"6px" }}>{k.icon}</div>
+            <div style={{ fontSize:"17px", fontWeight:"700", color:k.color }}>{k.value}</div>
+            <div style={{ fontSize:"11px", color:"#8a8aaa", marginTop:"2px" }}>{k.label}</div>
+            {k.sub && <div style={{ fontSize:"10px", color:k.color, marginTop:"2px", fontWeight:"600" }}>{k.sub}</div>}
+          </div>
+        ))}
+      </div>
+
+      {/* Trend chart */}
+      {trendData.length > 0 && (
+        <div style={{ background:"#fff", borderRadius:"12px", padding:"20px", marginBottom:"18px", boxShadow:"0 1px 4px rgba(0,0,0,0.05)" }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"16px" }}>
+            <div style={{ fontWeight:"700", color:"#1a1a2a", fontSize:"14px" }}>Revenue vs Expenses Trend</div>
+            <div style={{ display:"flex", gap:"16px", fontSize:"11px" }}>
+              <span style={{ color:theme.accent }}>■ Revenue</span>
+              <span style={{ color:"#dc2626" }}>■ Expenses</span>
+              <span style={{ color:"#059669" }}>■ Net Profit</span>
+            </div>
+          </div>
+          <div style={{ display:"flex", alignItems:"flex-end", gap:"6px", height:"140px", overflowX:"auto" }}>
+            {trendData.map(([period, vals])=>(
+              <div key={period} style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:"3px", minWidth:"52px", flex:1 }}>
+                <div style={{ display:"flex", alignItems:"flex-end", gap:"2px", height:"110px", width:"100%" }}>
+                  <div title={`Revenue: ${fmt(vals.revenue)}`} style={{ flex:1, background:theme.accent+"bb", borderRadius:"3px 3px 0 0", height:`${Math.max(3,(vals.revenue/maxTrend)*100)}%`, minHeight:"3px" }} />
+                  <div title={`Expenses: ${fmt(vals.expenses)}`} style={{ flex:1, background:"#dc2626bb", borderRadius:"3px 3px 0 0", height:`${Math.max(3,(vals.expenses/maxTrend)*100)}%`, minHeight:"3px" }} />
+                  <div title={`Net: ${fmt(vals.profit)}`} style={{ flex:1, background:vals.profit>=0?"#059669bb":"#f97316bb", borderRadius:"3px 3px 0 0", height:`${Math.max(3,(Math.abs(vals.profit)/maxTrend)*100)}%`, minHeight:"3px" }} />
+                </div>
+                <div style={{ fontSize:"9px", color:"#aaa", textAlign:"center", transform:"rotate(-30deg)", transformOrigin:"center", whiteSpace:"nowrap", marginTop:"4px" }}>{period}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Bottom: expense breakdown + summary */}
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"16px" }}>
+        {/* Expense categories */}
+        <div style={{ background:"#fff", borderRadius:"12px", padding:"18px", boxShadow:"0 1px 4px rgba(0,0,0,0.05)" }}>
+          <div style={{ fontWeight:"700", color:"#1a1a2a", marginBottom:"14px", fontSize:"14px" }}>Expense Breakdown</div>
+          {topExpCats.length === 0 && <div style={{ color:"#aaa", fontSize:"13px" }}>No expenses in this period</div>}
+          {topExpCats.map(([cat, amt])=>{
+            const pct = totalExpenses>0 ? (amt/totalExpenses*100) : 0;
+            return (
+              <div key={cat} style={{ marginBottom:"10px" }}>
+                <div style={{ display:"flex", justifyContent:"space-between", fontSize:"12px", marginBottom:"4px" }}>
+                  <span style={{ color:"#1a1a2a", fontWeight:"600" }}>{cat}</span>
+                  <span style={{ color:"#dc2626", fontWeight:"700" }}>{fmt(amt)} <span style={{ color:"#aaa", fontWeight:"400" }}>({pct.toFixed(0)}%)</span></span>
+                </div>
+                <div style={{ background:"#f0f0f0", borderRadius:"3px", height:"5px" }}>
+                  <div style={{ width:`${pct}%`, background:"#dc2626", height:"100%", borderRadius:"3px", transition:"width 0.4s" }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* P&L Summary */}
+        <div style={{ background:"#fff", borderRadius:"12px", padding:"18px", boxShadow:"0 1px 4px rgba(0,0,0,0.05)" }}>
+          <div style={{ fontWeight:"700", color:"#1a1a2a", marginBottom:"14px", fontSize:"14px" }}>P&L Summary</div>
+          {[
+            ["(+) Total Revenue",             fmt(totalRevenue),  "#2563eb", false],
+            ["(−) Cost of Goods Sold",         fmt(totalCOGS),     "#d97706", false],
+            ["    Gross Profit",               fmt(grossProfit),   theme.accent, true],
+            ["    Gross Margin",               `${grossMargin.toFixed(1)}%`, theme.accent, false],
+            ["(−) Operating Expenses",         fmt(totalExpenses), "#dc2626", false],
+            ["    NET PROFIT / (LOSS)",        fmt(netProfit),     netProfit>=0?"#059669":"#dc2626", true],
+            ["    Net Margin",                 `${netMargin.toFixed(1)}%`, netProfit>=0?"#059669":"#dc2626", false],
+          ].map(([label, val, color, bold])=>(
+            <div key={label} style={{
+              display:"flex", justifyContent:"space-between", padding:"8px 0",
+              borderBottom: bold ? "2px solid #e5e7eb" : "1px dotted #f0f0f0",
+              borderTop: label.includes("NET PROFIT") ? "2px solid #e5e7eb" : "none",
+            }}>
+              <span style={{ fontSize:"12px", color: bold?"#1a1a2a":"#6a6a8a", fontWeight:bold?"700":"400", fontFamily:"monospace" }}>{label}</span>
+              <span style={{ fontSize:"12px", color, fontWeight:"700", fontFamily:"monospace" }}>{val}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   EXPENSES PAGE — add, view, filter, delete expenses
+═══════════════════════════════════════════════════════════════════════════ */
+function ExpensesPage({ tenant, theme, updateTenant, session }) {
+  const defaultCats = EXPENSE_CATEGORIES[tenant.type] || EXPENSE_CATEGORIES.SUPERMARKET;
+  // Merge default + any custom categories saved on tenant
+  const customCats  = tenant.customExpenseCategories || [];
+  const cats        = [...new Set([...defaultCats, ...customCats])];
+  const today       = new Date().toISOString().slice(0,10);
+  const [showAdd,     setShowAdd]     = useState(false);
+  const [catFilter,   setCatFilter]   = useState("all");
+  const [fromF,       setFromF]       = useState("");
+  const [toF,         setToF]         = useState("");
+  const [showAddCat,  setShowAddCat]  = useState(false);
+  const [newCatName,  setNewCatName]  = useState("");
+  const [form, setForm] = useState({
+    category: cats[0], description:"", amount:"", date: today,
+  });
+
+  const expenses = tenant.expenses || [];
+
+  const filtered = expenses.filter(e => {
+    const d = e.date.slice(0,10);
+    if (catFilter !== "all" && e.category !== catFilter) return false;
+    if (fromF && d < fromF) return false;
+    if (toF   && d > toF)   return false;
+    return true;
+  }).sort((a,b) => new Date(b.date) - new Date(a.date));
+
+  const filteredTotal = filtered.reduce((s,e) => s + e.amount, 0);
+
+  function addExpense() {
+    if (!form.amount || isNaN(form.amount) || Number(form.amount) <= 0) {
+      alert("Please enter a valid amount."); return;
+    }
+    const newExp = {
+      id: uid(),
+      category:    form.category,
+      description: form.description,
+      amount:      Number(form.amount),
+      date:        new Date(form.date).toISOString(),
+      recordedBy:  session.userName,
+      ref:         "EXP-" + uid().toUpperCase().slice(0,8),
+    };
+    updateTenant(t => ({ ...t, expenses: [...(t.expenses||[]), newExp] }));
+    setForm({ category: cats[0], description:"", amount:"", date: today });
+    setShowAdd(false);
+  }
+
+  function deleteExpense(id) {
+    if (!window.confirm("Delete this expense record?")) return;
+    updateTenant(t => ({ ...t, expenses: (t.expenses||[]).filter(e=>e.id!==id) }));
+  }
+
+  const inputSt = { width:"100%", padding:"9px 12px", border:"1px solid #ddd", borderRadius:"7px", fontSize:"13px", outline:"none", boxSizing:"border-box" };
+
+  return (
+    <div>
+      {/* Controls */}
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"16px", flexWrap:"wrap", gap:"10px" }}>
+        <div style={{ display:"flex", gap:"10px", flexWrap:"wrap", alignItems:"center" }}>
+          <select value={catFilter} onChange={e=>setCatFilter(e.target.value)}
+            style={{ padding:"8px 12px", border:"1px solid #ddd", borderRadius:"7px", fontSize:"13px", background:"#fff" }}>
+            <option value="all">All Categories</option>
+            {cats.map(c=><option key={c}>{c}</option>)}
+          </select>
+          <input type="date" value={fromF} onChange={e=>setFromF(e.target.value)}
+            style={{ padding:"8px 12px", border:"1px solid #ddd", borderRadius:"7px", fontSize:"13px" }} />
+          <input type="date" value={toF}   onChange={e=>setToF(e.target.value)}
+            style={{ padding:"8px 12px", border:"1px solid #ddd", borderRadius:"7px", fontSize:"13px" }} />
+        </div>
+        <button onClick={()=>setShowAdd(true)}
+          style={{ padding:"10px 18px", background:theme.accent, color:"#fff", border:"none", borderRadius:"8px", fontSize:"13px", fontWeight:"700", cursor:"pointer" }}>
+          + Record Expense
+        </button>
+      </div>
+
+      {/* Summary */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:"12px", marginBottom:"16px" }}>
+        {[
+          { label:"Total Expenses (filtered)", value:fmt(filteredTotal), color:"#dc2626" },
+          { label:"Records",                   value:filtered.length,    color:"#7c3aed" },
+          { label:"Avg per Record",            value:fmt(filtered.length?Math.round(filteredTotal/filtered.length):0), color:"#d97706" },
+        ].map(s=>(
+          <div key={s.label} style={{ background:"#fff", borderRadius:"10px", padding:"14px", borderLeft:`3px solid ${s.color}`, boxShadow:"0 1px 4px rgba(0,0,0,0.05)" }}>
+            <div style={{ fontSize:"18px", fontWeight:"700", color:s.color }}>{s.value}</div>
+            <div style={{ fontSize:"11px", color:"#8a8aaa", marginTop:"2px" }}>{s.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Add form */}
+      {showAdd && (
+        <div style={{ background:"#fff", border:"1px solid #e5e7eb", borderRadius:"12px", padding:"20px", marginBottom:"16px", boxShadow:"0 2px 8px rgba(0,0,0,0.07)" }}>
+          <div style={{ fontWeight:"700", color:"#1a1a2a", marginBottom:"16px", fontSize:"14px" }}>Record New Expense</div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:"12px", marginBottom:"12px" }}>
+            <div>
+              <div style={{ fontSize:"11px", color:"#6a6a8a", marginBottom:"5px", textTransform:"uppercase", letterSpacing:"0.5px", fontWeight:"600" }}>
+                Category
+                <button onClick={()=>setShowAddCat(v=>!v)} style={{ marginLeft:"8px", background:"none", border:"none", color:theme.accent, fontSize:"11px", cursor:"pointer", fontWeight:"700" }}>
+                  + Add Category
+                </button>
+              </div>
+              <select value={form.category} onChange={e=>setForm(p=>({...p,category:e.target.value}))} style={inputSt}>
+                {cats.map(c=><option key={c}>{c}</option>)}
+              </select>
+              {showAddCat && (
+                <div style={{ display:"flex", gap:"6px", marginTop:"6px" }}>
+                  <input value={newCatName} onChange={e=>setNewCatName(e.target.value)}
+                    placeholder="New category name..." style={{ ...inputSt, flex:1, marginBottom:0 }} />
+                  <button onClick={()=>{
+                    const n = newCatName.trim();
+                    if (!n || cats.includes(n)) return;
+                    updateTenant(t=>({...t, customExpenseCategories:[...(t.customExpenseCategories||[]),n]}));
+                    setForm(p=>({...p,category:n}));
+                    setNewCatName(""); setShowAddCat(false);
+                  }} style={{ padding:"9px 14px", background:theme.accent, color:"#fff", border:"none", borderRadius:"7px", fontSize:"12px", fontWeight:"700", cursor:"pointer" }}>
+                    Save
+                  </button>
+                </div>
+              )}
+            </div>
+            <div>
+              <div style={{ fontSize:"11px", color:"#6a6a8a", marginBottom:"5px", textTransform:"uppercase", letterSpacing:"0.5px", fontWeight:"600" }}>Amount (₦)</div>
+              <input type="number" value={form.amount} onChange={e=>setForm(p=>({...p,amount:e.target.value}))}
+                placeholder="e.g. 25000" style={inputSt} />
+            </div>
+            <div>
+              <div style={{ fontSize:"11px", color:"#6a6a8a", marginBottom:"5px", textTransform:"uppercase", letterSpacing:"0.5px", fontWeight:"600" }}>Date</div>
+              <input type="date" value={form.date} onChange={e=>setForm(p=>({...p,date:e.target.value}))} style={inputSt} />
+            </div>
+          </div>
+          <div style={{ marginBottom:"14px" }}>
+            <div style={{ fontSize:"11px", color:"#6a6a8a", marginBottom:"5px", textTransform:"uppercase", letterSpacing:"0.5px", fontWeight:"600" }}>Description (optional)</div>
+            <input type="text" value={form.description} onChange={e=>setForm(p=>({...p,description:e.target.value}))}
+              placeholder="e.g. PHCN bill for May, paid to landlord..." style={inputSt} />
+          </div>
+          <div style={{ display:"flex", gap:"10px" }}>
+            <button onClick={addExpense}
+              style={{ padding:"10px 24px", background:theme.accent, color:"#fff", border:"none", borderRadius:"8px", fontSize:"13px", fontWeight:"700", cursor:"pointer" }}>
+              Save Expense
+            </button>
+            <button onClick={()=>setShowAdd(false)}
+              style={{ padding:"10px 20px", background:"#f0f0f0", color:"#666", border:"none", borderRadius:"8px", fontSize:"13px", cursor:"pointer" }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Table */}
+      <div style={{ background:"#fff", borderRadius:"12px", overflow:"hidden", boxShadow:"0 1px 4px rgba(0,0,0,0.05)" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", fontSize:"13px" }}>
+          <thead>
+            <tr style={{ background:"#f8f9ff" }}>
+              {["Date","Ref","Category","Description","Amount","Recorded By",""].map(h=>(
+                <th key={h} style={{ padding:"10px 14px", textAlign:"left", fontSize:"10px", color:"#8a8aaa", textTransform:"uppercase", letterSpacing:"0.5px", fontWeight:"700", borderBottom:"1px solid #f0f0f0" }}>{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.length === 0 && (
+              <tr><td colSpan={7} style={{ padding:"30px", textAlign:"center", color:"#aaa" }}>No expenses found. Click "Record Expense" to add one.</td></tr>
+            )}
+            {filtered.map((e,i)=>(
+              <tr key={e.id} style={{ background:i%2===0?"#fff":"#fafafe" }}>
+                <td style={{ padding:"10px 14px", color:"#6a6a8a" }}>{new Date(e.date).toLocaleDateString("en-NG")}</td>
+                <td style={{ padding:"10px 14px", fontFamily:"monospace", fontSize:"11px", color:"#a0a0c0" }}>{e.ref}</td>
+                <td style={{ padding:"10px 14px" }}>
+                  <span style={{ background:"#fee2e2", color:"#991b1b", padding:"2px 9px", borderRadius:"10px", fontSize:"11px", fontWeight:"700" }}>{e.category}</span>
+                </td>
+                <td style={{ padding:"10px 14px", color:"#6a6a8a", maxWidth:"160px" }}>{e.description || <span style={{ color:"#ccc" }}>—</span>}</td>
+                <td style={{ padding:"10px 14px", color:"#dc2626", fontWeight:"700" }}>{fmt(e.amount)}</td>
+                <td style={{ padding:"10px 14px", color:"#8a8aaa", fontSize:"12px" }}>{e.recordedBy}</td>
+                <td style={{ padding:"10px 14px" }}>
+                  {(session.role === "tenant_super" || session.role === "admin") && (
+                    <button onClick={()=>deleteExpense(e.id)}
+                      style={{ background:"#fee2e2", color:"#dc2626", border:"none", borderRadius:"5px", padding:"4px 9px", fontSize:"11px", cursor:"pointer" }}>
+                      Delete
+                    </button>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BALANCE SHEET — assets, liabilities, equity with date range
+═══════════════════════════════════════════════════════════════════════════ */
+function BalanceSheet({ tenant, theme }) {
+  const today    = new Date().toISOString().slice(0,10);
+  const yearStart= new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0,10);
+  const [from, setFrom] = useState(yearStart);
+  const [to,   setTo]   = useState(today);
+
+  function inRange(dateStr) {
+    const d = dateStr.slice(0,10);
+    return (!from || d >= from) && (!to || d <= to);
+  }
+
+  const sales    = (tenant.sales    || []).filter(s => inRange(s.date));
+  const expenses = (tenant.expenses || []).filter(e => inRange(e.date));
+  const products = tenant.products  || [];
+
+  // ── ASSETS ────────────────────────────────────────────────────────────
+  const inventoryValue  = products.reduce((s,p) => s + p.qty * p.cost, 0);
+  const inventoryRetail = products.reduce((s,p) => s + p.qty * p.price, 0);
+  const cashFromSales   = sales.reduce((s,x) => s + x.total, 0);
+  const totalAssets     = inventoryValue + cashFromSales;
+
+  // ── LIABILITIES ───────────────────────────────────────────────────────
+  const totalExpensesPaid = expenses.reduce((s,e) => s + e.amount, 0);
+  // Outstanding (unpaid credit sales) — not tracked yet, show 0
+  const outstandingCredit = 0;
+  const totalLiabilities  = totalExpensesPaid + outstandingCredit;
+
+  // ── EQUITY ────────────────────────────────────────────────────────────
+  const totalCOGS  = sales.reduce((s,x) => {
+    const prod = products.find(p=>p.id===x.productId);
+    return s + (prod?.cost||0)*x.qty;
+  }, 0);
+  const grossProfit  = cashFromSales - totalCOGS;
+  const netProfit    = grossProfit - totalExpensesPaid;
+  const ownerEquity  = totalAssets - totalLiabilities;
+
+  const inputSt = { padding:"8px 12px", border:"1px solid #ddd", borderRadius:"7px", fontSize:"13px", outline:"none" };
+
+  function BSSection({ title, color, icon, rows, total, totalLabel }) {
+    return (
+      <div style={{ background:"#fff", borderRadius:"12px", padding:"20px", boxShadow:"0 1px 4px rgba(0,0,0,0.05)", marginBottom:"14px" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:"8px", marginBottom:"14px", paddingBottom:"10px", borderBottom:`2px solid ${color}22` }}>
+          <span style={{ fontSize:"20px" }}>{icon}</span>
+          <div style={{ fontWeight:"700", color:color, fontSize:"15px", textTransform:"uppercase", letterSpacing:"0.5px" }}>{title}</div>
+        </div>
+        {rows.map(([label, val, sub])=>(
+          <div key={label} style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", padding:"9px 0", borderBottom:"1px dotted #f0f0f0" }}>
+            <div>
+              <div style={{ fontSize:"13px", color:"#1a1a2a" }}>{label}</div>
+              {sub && <div style={{ fontSize:"11px", color:"#aaa", marginTop:"1px" }}>{sub}</div>}
+            </div>
+            <div style={{ fontSize:"13px", fontWeight:"700", color:"#1a1a2a", fontFamily:"monospace" }}>{fmt(val)}</div>
+          </div>
+        ))}
+        <div style={{ display:"flex", justifyContent:"space-between", padding:"12px 0 4px", borderTop:`2px solid ${color}`, marginTop:"8px" }}>
+          <span style={{ fontWeight:"700", color:color, fontSize:"14px", textTransform:"uppercase" }}>{totalLabel}</span>
+          <span style={{ fontWeight:"700", color:color, fontSize:"15px", fontFamily:"monospace" }}>{fmt(total)}</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      {/* Date range */}
+      <div style={{ display:"flex", gap:"12px", alignItems:"center", marginBottom:"20px", flexWrap:"wrap" }}>
+        <span style={{ fontSize:"13px", color:"#6a6a8a" }}>Period:</span>
+        <input type="date" value={from} onChange={e=>setFrom(e.target.value)} style={inputSt} />
+        <span style={{ fontSize:"13px", color:"#6a6a8a" }}>to</span>
+        <input type="date" value={to}   onChange={e=>setTo(e.target.value)}   style={inputSt} />
+        <div style={{ fontSize:"12px", color:"#aaa" }}>As at {new Date(to||today).toLocaleDateString("en-NG",{day:"numeric",month:"long",year:"numeric"})}</div>
+      </div>
+
+      {/* Accounting equation */}
+      <div style={{ background:"linear-gradient(135deg,#0f0f1e,#1a1020)", borderRadius:"12px", padding:"18px 22px", marginBottom:"20px", display:"flex", justifyContent:"space-around", alignItems:"center" }}>
+        {[
+          { label:"Total Assets",      val:totalAssets,      color:"#4ade80"  },
+          { label:"=",                 val:null,             color:"#ffffff44" },
+          { label:"Total Liabilities", val:totalLiabilities, color:"#f87171"  },
+          { label:"+",                 val:null,             color:"#ffffff44" },
+          { label:"Owner's Equity",    val:ownerEquity,      color:"#a78bfa"  },
+        ].map((item,i)=>(
+          item.val === null
+            ? <div key={i} style={{ fontSize:"28px", color:item.color, fontWeight:"300" }}>{item.label}</div>
+            : <div key={i} style={{ textAlign:"center" }}>
+                <div style={{ fontSize:"22px", fontWeight:"700", color:item.color, fontFamily:"monospace" }}>{fmt(item.val)}</div>
+                <div style={{ fontSize:"11px", color:"rgba(255,255,255,0.5)", marginTop:"3px", textTransform:"uppercase", letterSpacing:"1px" }}>{item.label}</div>
+              </div>
+        ))}
+      </div>
+
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:"16px" }}>
+        <div>
+          <BSSection
+            title="Assets" color="#059669" icon="🏦"
+            rows={[
+              ["Cash from Sales", cashFromSales, `${sales.length} transactions in period`],
+              ["Inventory (Cost)", inventoryValue, `${products.length} products · Retail: ${fmt(inventoryRetail)}`],
+            ]}
+            total={totalAssets}
+            totalLabel="Total Assets"
+          />
+        </div>
+        <div>
+          <BSSection
+            title="Liabilities" color="#dc2626" icon="💸"
+            rows={[
+              ["Operating Expenses Paid", totalExpensesPaid, `${expenses.length} expense records`],
+              ["Cost of Goods Sold", totalCOGS, "Stock consumed in sales"],
+              ["Outstanding Credit", outstandingCredit, "Credit sales not yet collected"],
+            ]}
+            total={totalLiabilities}
+            totalLabel="Total Liabilities"
+          />
+          <BSSection
+            title="Equity" color="#7c3aed" icon="📊"
+            rows={[
+              ["Gross Profit",    grossProfit,  `Margin: ${cashFromSales>0?((grossProfit/cashFromSales)*100).toFixed(1):0}%`],
+              ["Less: Expenses",  -totalExpensesPaid, "Operating costs"],
+              ["Net Profit/(Loss)", netProfit,  `Net margin: ${cashFromSales>0?((netProfit/cashFromSales)*100).toFixed(1):0}%`],
+            ]}
+            total={ownerEquity}
+            totalLabel="Owner's Equity"
+          />
+        </div>
+      </div>
+
+      <div style={{ background:"#fffbeb", border:"1px solid #f59e0b", borderRadius:"10px", padding:"12px 16px", fontSize:"12px", color:"#92400e", marginTop:"6px" }}>
+        📌 <strong>Note:</strong> This balance sheet is derived from recorded sales and expenses within the selected period. For a full audited balance sheet, fixed assets, depreciation, accounts payable/receivable, and capital contributions should be entered by your accountant.
       </div>
     </div>
   );
